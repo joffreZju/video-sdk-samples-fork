@@ -54,6 +54,7 @@ void EncodeCuda(CUcontext cuContext, char *szInFilePath, int nWidth, int nHeight
 
     std::unique_ptr<uint8_t[]> pHostFrame(new uint8_t[nFrameSize]);
     int nFrame = 0;
+    NV_ENC_PIC_PARAMS picParams = {};
     while (true)
     {
         // Load the next frame from disk
@@ -72,20 +73,27 @@ void EncodeCuda(CUcontext cuContext, char *szInFilePath, int nWidth, int nHeight
                 encoderInputFrame->chromaOffsets,
                 encoderInputFrame->numChromaPlanes);
 
-            enc.EncodeFrame(vPacket);
+            enc.EncodeFrame(vPacket, &picParams);
+            picParams.encodePicFlags = 0;
         }
         else
         {
             enc.EndEncode(vPacket);
         }
-        nFrame += (int)vPacket.size();
+        //nFrame += (int)vPacket.size();
         for (std::vector<uint8_t> &packet : vPacket)
         {
             // For each encoded packet
-            fpOut.write(reinterpret_cast<char*>(packet.data()), packet.size());
+            //fpOut.write(reinterpret_cast<char*>(packet.data()), packet.size());
+            std::cout << "fetch encoded frame succuess index:" << nFrame++ << std::endl;
         }
 
-        if (nRead != nFrameSize) break;
+        if (nRead != nFrameSize) {
+            fpIn.clear();
+            fpIn.seekg(0, std::ios::beg);
+            picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEINTRA | NV_ENC_PIC_FLAG_FORCEIDR;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     enc.DestroyEncoder();
@@ -100,8 +108,9 @@ void ShowEncoderCapability()
     ck(cuInit(0));
     int nGpu = 0;
     ck(cuDeviceGetCount(&nGpu));
+    printf("gpu count %d\n", nGpu);
     printf("Encoder Capability\n");
-    printf("#  %-20.20s H264 H264_444 H264_ME H264_WxH  HEVC HEVC_Main10 HEVC_Lossless HEVC_SAO HEVC_444 HEVC_ME HEVC_WxH\n", "GPU");
+    printf("#  %-30.30s H264 H264_444 H264_ME H264_WxH  HEVC HEVC_Main10 HEVC_Lossless HEVC_SAO HEVC_444 HEVC_ME HEVC_WxH\n", "GPU");
     for (int iGpu = 0; iGpu < nGpu; iGpu++) {
         CUdevice cuDevice = 0;
         ck(cuDeviceGet(&cuDevice, iGpu));
@@ -112,7 +121,7 @@ void ShowEncoderCapability()
         NvEncoderCuda enc(cuContext, 1280, 720, NV_ENC_BUFFER_FORMAT_NV12);
 
         //Adjusted # %-20.20s H264  H264_444  H264_ME  H264_WxH HEVC  HEVC_Main10  HEVC_Lossless  HEVC_SAO  HEVC_444  HEVC_ME  HEVC_WxH
-        printf("%-2d %-20.20s   %s      %s       %s    %4dx%-4d   %s       %s            %s           %s        %s       %s    %4dx%-4d\n", 
+        printf("%-2d %-30.30s   %s      %s       %s    %4dx%-4d   %s       %s            %s           %s        %s       %s    %4dx%-4d\n", 
             iGpu, szDeviceName,
             enc.GetCapabilityValue(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES) ? "+" : "-",
             enc.GetCapabilityValue(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_YUV444_ENCODE) ? "+" : "-",
@@ -262,9 +271,42 @@ void ParseCommandLine(int argc, char *argv[], char *szInputFileName, int &nWidth
 *  and submits them to NVENC hardware for encoding as part of EncodeFrame() function.
 */
 
+#include <iostream>
+#include <iomanip>
+#include <cstddef>
+#include <vector>
+#include <tuple>
+
+void uuid_print(CUuuid a) {
+    std::cout << "GPU";
+    std::vector<std::tuple<int, int> > r = { {0,4}, {4,6}, {6,8}, {8,10}, {10,16} };
+    for (auto t : r) {
+        std::cout << "-";
+        for (int i = std::get<0>(t); i < std::get<1>(t); i++)
+            std::cout << std::hex << std::setfill('0') << std::setw(2) << (unsigned)(unsigned char)a.bytes[i];
+    }
+}
+
 int main(int argc, char **argv)
 {
-    char szInFilePath[256] = "",
+    int nDevices = 0;
+    ck(cuInit(0));
+
+    ck(cuDeviceGetCount(&nDevices));
+    for (int i = 0; i < nDevices; i++) {
+        CUdevice dev;
+        ck(cuDeviceGet(&dev, i));
+        char name[256] = {};
+        ck(cuDeviceGetName(name, 256, dev));
+        CUuuid uuid;
+        ck(cuDeviceGetUuid(&uuid, dev));
+
+        printf("Device Number: %d, name:%s, uud:", i, name);
+        uuid_print(uuid);
+        printf("\n");
+    }
+
+    char szInFilePath[256] = "HeavyHand_1080p.yuv",
         szOutFilePath[256] = "";
     int nWidth = 1920, nHeight = 1080;
     NV_ENC_BUFFER_FORMAT eFormat = NV_ENC_BUFFER_FORMAT_IYUV;
@@ -284,11 +326,13 @@ int main(int argc, char **argv)
         ck(cuInit(0));
         int nGpu = 0;
         ck(cuDeviceGetCount(&nGpu));
+        std::cout << "cuDeviceGetCount:" << nGpu << std::endl;
         if (iGpu < 0 || iGpu >= nGpu)
         {
             std::cout << "GPU ordinal out of range. Should be within [" << 0 << ", " << nGpu - 1 << "]" << std::endl;
             return 1;
         }
+        std::cout << "use gpu:" << iGpu << std::endl;
         CUdevice cuDevice = 0;
         ck(cuDeviceGet(&cuDevice, iGpu));
         char szDeviceName[80];
