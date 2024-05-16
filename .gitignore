@@ -1,3 +1,7 @@
 
 *.opendb
 *.db
+.vs
+.vscode
+x64.Debug/
+x64.Release/
